@@ -10,8 +10,24 @@ export function render(vnode, parent, store) {
 		options.store = store
 		store.originData = JSON.parse(JSON.stringify(store.data))	
 	}
-	diff(null, vnode, {}, false, parent, false)
+    diff(null, vnode, {}, false, parent, false)
+    
+    if(store){
+        requestIdleCallback(execTask)
+    }
+      
+    function execTask(deadline){
+        while (deadline.timeRemaining() > 0){
+            store.update()
+        }
+        setTimeout(function(){
+            requestIdleCallback(execTask)
+        },200)
+        
+    }
 } 
+
+
 
 function extendStoreUpate(store){
 	store.update = function(){
