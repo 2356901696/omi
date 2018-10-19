@@ -232,28 +232,82 @@
         });
         if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass;
     }
+    function diff$1(current, pre) {
+        var result = {};
+        syncKeys(current, pre);
+        _diff(current, pre, '', result);
+        return result;
+    }
+    function syncKeys(current, pre) {
+        if (current !== pre) {
+            var rootCurrentType = type(current);
+            var rootPreType = type(pre);
+            if ('[object Object]' == rootCurrentType && '[object Object]' == rootPreType) {
+                if (Object.keys(current).length >= Object.keys(pre).length) for (var key in pre) {
+                    var currentValue = current[key];
+                    if (void 0 === currentValue) current[key] = null; else syncKeys(currentValue, pre[key]);
+                }
+            } else if ('[object Array]' == rootCurrentType && '[object Array]' == rootPreType) if (current.length >= pre.length) pre.forEach(function(item, index) {
+                syncKeys(current[index], item);
+            });
+        }
+    }
+    function _diff(current, pre, path, result) {
+        if (current !== pre) {
+            var rootCurrentType = type(current);
+            var rootPreType = type(pre);
+            if ('[object Object]' == rootCurrentType) if ('[object Object]' != rootPreType || Object.keys(current).length < Object.keys(pre).length) setResult(result, path, current); else {
+                for (var key in current) !function(key) {
+                    var currentValue = current[key];
+                    var preValue = pre[key];
+                    var currentType = type(currentValue);
+                    var preType = type(preValue);
+                    if ('[object Array]' != currentType && '[object Object]' != currentType) {
+                        if (currentValue != pre[key]) setResult(result, ('' == path ? '' : path + ".") + key, currentValue);
+                    } else if ('[object Array]' == currentType) if ('[object Array]' != preType) setResult(result, ('' == path ? '' : path + ".") + key, currentValue); else if (currentValue.length < preValue.length) setResult(result, ('' == path ? '' : path + ".") + key, currentValue); else currentValue.forEach(function(item, index) {
+                        _diff(item, preValue[index], ('' == path ? '' : path + ".") + key + '[' + index + ']', result);
+                    }); else if ('[object Object]' == currentType) if ('[object Object]' != preType || Object.keys(currentValue).length < Object.keys(preValue).length) setResult(result, ('' == path ? '' : path + ".") + key, currentValue); else for (var subKey in currentValue) _diff(currentValue[subKey], preValue[subKey], ('' == path ? '' : path + ".") + key + '.' + subKey, result);
+                }(key);
+            } else if ('[object Array]' == rootCurrentType) if ('[object Array]' != rootPreType) setResult(result, path, current); else if (current.length < pre.length) setResult(result, path, current); else current.forEach(function(item, index) {
+                _diff(item, pre[index], path + '[' + index + ']', result);
+            }); else setResult(result, path, current);
+        }
+    }
+    function setResult(result, k, v) {
+        if ('[object Function]' != type(v)) result[k] = v;
+    }
+    function type(obj) {
+        return Object.prototype.toString.call(obj);
+    }
     function render(vnode, parent, store) {
+        function execTask(deadline) {
+            while (deadline.timeRemaining() > 0) store.update();
+            setTimeout(function() {
+                requestIdleCallback(execTask);
+            }, 200);
+        }
         parent = 'string' == typeof parent ? document.querySelector(parent) : parent;
         if (store) {
             store.instances = [];
             extendStoreUpate(store);
             options.store = store;
-            store.data = new JSONPatcherProxy(store.data).observe(!0, handler);
+            store.originData = JSON.parse(JSON.stringify(store.data));
         }
         diff(null, vnode, {}, !1, parent, !1);
-    }
-    function update(patch) {
-        options.store.update(patch);
+        if (store) requestIdleCallback(execTask);
     }
     function extendStoreUpate(store) {
-        store.update = function(patch) {
+        store.update = function() {
             var _this = this;
-            var updateAll = matchGlobalData(this.globalData, patch);
-            if (Object.keys(patch).length > 0) {
+            var diffResult = diff$1(this.data, this.originData);
+            if ('' == Object.keys(diffResult)[0]) diffResult = diffResult[''];
+            var updateAll = matchGlobalData(this.globalData, diffResult);
+            if (Object.keys(diffResult).length > 0) {
                 this.instances.forEach(function(instance) {
-                    if (updateAll || _this.updateAll || instance.constructor.updatePath && needUpdate(patch, instance.constructor.updatePath)) instance.update();
+                    if (updateAll || _this.updateAll || instance.constructor.updatePath && needUpdate(diffResult, instance.constructor.updatePath)) instance.update();
                 });
-                this.onChange && this.onChange(patch);
+                this.onChange && this.onChange(diffResult);
+                for (var key in diffResult) updateByPath(this.originData, key, 'object' == typeof diffResult[key] ? JSON.parse(JSON.stringify(diffResult[key])) : diffResult[key]);
             }
         };
     }
@@ -279,31 +333,10 @@
         }
         return !1;
     }
-    function fixPath(path) {
-        var mpPath = '';
-        var arr = path.replace('/', '').split('/');
-        arr.forEach(function(item, index) {
-            if (index) if (isNaN(Number(item))) mpPath += '.' + item; else mpPath += '[' + item + ']'; else mpPath += item;
-        });
-        return mpPath;
-    }
-    function getArrayPatch(path) {
-        var arr = path.replace('/', '').split('/');
-        var current = options.store.data[arr[0]];
-        for (var i = 1, len = arr.length; i < len - 1; i++) current = current[arr[i]];
-        return {
-            k: fixArrPath(path),
-            v: current
-        };
-    }
-    function fixArrPath(path) {
-        var mpPath = '';
-        var arr = path.replace('/', '').split('/');
-        var len = arr.length;
-        arr.forEach(function(item, index) {
-            if (index < len - 1) if (index) if (isNaN(Number(item))) mpPath += '.' + item; else mpPath += '[' + item + ']'; else mpPath += item;
-        });
-        return mpPath;
+    function updateByPath(origin, path, value) {
+        var arr = path.replace(/]/g, '').replace(/\[/g, '.').split('.');
+        var current = origin;
+        for (var i = 0, len = arr.length; i < len; i++) if (i === len - 1) current[arr[i]] = value; else current = current[arr[i]];
     }
     function define(name, ctor) {
         customElements.define(name, ctor);
@@ -368,6 +401,20 @@
             Object.setPrototypeOf(HTMLElement, BuiltInHTMLElement);
         }
     }();
+    window.requestIdleCallback = window.requestIdleCallback || function(cb) {
+        return setTimeout(function() {
+            var start = Date.now();
+            cb({
+                didTimeout: !1,
+                timeRemaining: function() {
+                    return Math.max(0, 50 - (Date.now() - start));
+                }
+            });
+        }, 1);
+    };
+    window.cancelIdleCallback = window.cancelIdleCallback || function(id) {
+        clearTimeout(id);
+    };
     'function' == typeof Promise ? Promise.resolve().then.bind(Promise.resolve()) : setTimeout;
     var IS_NON_DIMENSIONAL = /acit|ex(?:s|g|n|p|$)|rph|ows|mnc|ntw|ine[ch]|zoo|^ord/i;
     var diffLevel = 0;
@@ -418,221 +465,6 @@
         WeElement.prototype.afterUpdate = function() {};
         return WeElement;
     }(HTMLElement);
-    var JSONPatcherProxy = function() {
-        function deepClone(obj) {
-            switch (typeof obj) {
-              case 'object':
-                return JSON.parse(JSON.stringify(obj));
-
-              case 'undefined':
-                return null;
-
-              default:
-                return obj;
-            }
-        }
-        function escapePathComponent(str) {
-            if (-1 == str.indexOf('/') && -1 == str.indexOf('~')) return str; else return str.replace(/~/g, '~0').replace(/\//g, '~1');
-        }
-        function findObjectPath(instance, obj) {
-            var pathComponents = [];
-            var parentAndPath = instance.parenthoodMap.get(obj);
-            while (parentAndPath && parentAndPath.path) {
-                pathComponents.unshift(parentAndPath.path);
-                parentAndPath = instance.parenthoodMap.get(parentAndPath.parent);
-            }
-            if (pathComponents.length) {
-                var path = pathComponents.join('/');
-                return '/' + path;
-            }
-            return '';
-        }
-        function setTrap(instance, target, key, newValue) {
-            var parentPath = findObjectPath(instance, target);
-            var destinationPropKey = parentPath + '/' + escapePathComponent(key);
-            if (instance.proxifiedObjectsMap.has(newValue)) {
-                var newValueOriginalObject = instance.proxifiedObjectsMap.get(newValue);
-                instance.parenthoodMap.set(newValueOriginalObject.originalObject, {
-                    parent: target,
-                    path: key
-                });
-            }
-            var revokableInstance = instance.proxifiedObjectsMap.get(newValue);
-            if (revokableInstance && !instance.isProxifyingTreeNow) revokableInstance.inherited = !0;
-            if (newValue && 'object' == typeof newValue && !instance.proxifiedObjectsMap.has(newValue)) {
-                instance.parenthoodMap.set(newValue, {
-                    parent: target,
-                    path: key
-                });
-                newValue = instance.A(target, newValue, key);
-            }
-            var operation = {
-                op: 'remove',
-                path: destinationPropKey
-            };
-            if (void 0 === newValue) {
-                if (!Array.isArray(target) && !target.hasOwnProperty(key)) return Reflect.set(target, key, newValue);
-                if (Array.isArray(target)) operation.op = 'replace', operation.value = null;
-                var oldValue = instance.proxifiedObjectsMap.get(target[key]);
-                if (oldValue) {
-                    instance.parenthoodMap.delete(target[key]);
-                    instance.disableTrapsForProxy(oldValue);
-                    instance.proxifiedObjectsMap.delete(oldValue);
-                }
-            } else {
-                if (Array.isArray(target) && !Number.isInteger(+key.toString())) {
-                    if ('length' != key) console.warn('JSONPatcherProxy noticed a non-integer prop was set for an array. This will not emit a patch');
-                    return Reflect.set(target, key, newValue);
-                }
-                operation.op = 'add';
-                if (target.hasOwnProperty(key)) if (void 0 !== target[key] || Array.isArray(target)) operation.op = 'replace';
-                operation.value = newValue;
-            }
-            var reflectionResult = Reflect.set(target, key, newValue);
-            instance.defaultCallback(operation);
-            return reflectionResult;
-        }
-        function deleteTrap(instance, target, key) {
-            if (void 0 !== target[key]) {
-                var parentPath = findObjectPath(instance, target);
-                var destinationPropKey = parentPath + '/' + escapePathComponent(key);
-                var revokableProxyInstance = instance.proxifiedObjectsMap.get(target[key]);
-                if (revokableProxyInstance) if (revokableProxyInstance.inherited) revokableProxyInstance.inherited = !1; else {
-                    instance.parenthoodMap.delete(revokableProxyInstance.originalObject);
-                    instance.disableTrapsForProxy(revokableProxyInstance);
-                    instance.proxifiedObjectsMap.delete(target[key]);
-                }
-                var reflectionResult = Reflect.deleteProperty(target, key);
-                instance.defaultCallback({
-                    op: 'remove',
-                    path: destinationPropKey
-                });
-                return reflectionResult;
-            }
-        }
-        function resume() {
-            var _this = this;
-            this.defaultCallback = function(operation) {
-                _this.isRecording && _this.patches.push(operation);
-                _this.userCallback && _this.userCallback(operation);
-            };
-            this.isObserving = !0;
-        }
-        function pause() {
-            this.defaultCallback = function() {};
-            this.isObserving = !1;
-        }
-        function JSONPatcherProxy(root, showDetachedWarning) {
-            this.isProxifyingTreeNow = !1;
-            this.isObserving = !1;
-            this.proxifiedObjectsMap = new Map();
-            this.parenthoodMap = new Map();
-            if ('boolean' != typeof showDetachedWarning) showDetachedWarning = !0;
-            this.showDetachedWarning = showDetachedWarning;
-            this.originalObject = root;
-            this.cachedProxy = null;
-            this.isRecording = !1;
-            this.userCallback;
-            this.resume = resume.bind(this);
-            this.pause = pause.bind(this);
-        }
-        JSONPatcherProxy.deepClone = deepClone;
-        JSONPatcherProxy.escapePathComponent = escapePathComponent;
-        JSONPatcherProxy.prototype.generateProxyAtPath = function(parent, obj, path) {
-            var _this2 = this;
-            if (!obj) return obj;
-            var traps = {
-                set: function(target, key, value, receiver) {
-                    return setTrap(_this2, target, key, value);
-                },
-                deleteProperty: function(target, key) {
-                    return deleteTrap(_this2, target, key);
-                }
-            };
-            var revocableInstance = Proxy.revocable(obj, traps);
-            revocableInstance.trapsInstance = traps;
-            revocableInstance.originalObject = obj;
-            this.parenthoodMap.set(obj, {
-                parent: parent,
-                path: path
-            });
-            this.proxifiedObjectsMap.set(revocableInstance.proxy, revocableInstance);
-            return revocableInstance.proxy;
-        };
-        JSONPatcherProxy.prototype.A = function(parent, root, path) {
-            for (var key in root) if (root.hasOwnProperty(key)) if (root[key] instanceof Object) root[key] = this.A(root, root[key], escapePathComponent(key));
-            return this.generateProxyAtPath(parent, root, path);
-        };
-        JSONPatcherProxy.prototype.proxifyObjectTree = function(root) {
-            this.pause();
-            this.isProxifyingTreeNow = !0;
-            var proxifiedObject = this.A(void 0, root, '');
-            this.isProxifyingTreeNow = !1;
-            this.resume();
-            return proxifiedObject;
-        };
-        JSONPatcherProxy.prototype.disableTrapsForProxy = function(revokableProxyInstance) {
-            if (this.showDetachedWarning) {
-                var message = "You're accessing an object that is detached from the observedObject tree, see https://github.com/Palindrom/JSONPatcherProxy#detached-objects";
-                revokableProxyInstance.trapsInstance.set = function(targetObject, propKey, newValue) {
-                    console.warn(message);
-                    return Reflect.set(targetObject, propKey, newValue);
-                };
-                revokableProxyInstance.trapsInstance.set = function(targetObject, propKey, newValue) {
-                    console.warn(message);
-                    return Reflect.set(targetObject, propKey, newValue);
-                };
-                revokableProxyInstance.trapsInstance.deleteProperty = function(targetObject, propKey) {
-                    return Reflect.deleteProperty(targetObject, propKey);
-                };
-            } else {
-                delete revokableProxyInstance.trapsInstance.set;
-                delete revokableProxyInstance.trapsInstance.get;
-                delete revokableProxyInstance.trapsInstance.deleteProperty;
-            }
-        };
-        JSONPatcherProxy.prototype.observe = function(record, callback) {
-            if (!record && !callback) throw new Error('You need to either record changes or pass a callback');
-            this.isRecording = record;
-            this.userCallback = callback;
-            if (record) this.patches = [];
-            this.cachedProxy = this.proxifyObjectTree(this.originalObject);
-            return this.cachedProxy;
-        };
-        JSONPatcherProxy.prototype.generate = function() {
-            if (!this.isRecording) throw new Error('You should set record to true to get patches later');
-            return this.patches.splice(0, this.patches.length);
-        };
-        JSONPatcherProxy.prototype.revoke = function() {
-            this.proxifiedObjectsMap.forEach(function(el) {
-                el.revoke();
-            });
-        };
-        JSONPatcherProxy.prototype.disableTraps = function() {
-            this.proxifiedObjectsMap.forEach(this.disableTrapsForProxy, this);
-        };
-        return JSONPatcherProxy;
-    }();
-    var timeout = null;
-    var patchs = {};
-    var handler = function(patch) {
-        clearTimeout(timeout);
-        if ('remove' === patch.op) {
-            var kv = getArrayPatch(patch.path);
-            patchs[kv.k] = kv.v;
-            timeout = setTimeout(function() {
-                update(patchs);
-                patchs = {};
-            });
-        } else {
-            var key = fixPath(patch.path);
-            patchs[key] = patch.value;
-            timeout = setTimeout(function() {
-                update(patchs);
-                patchs = {};
-            });
-        }
-    };
     options.root.Omi = {
         tag: tag,
         WeElement: WeElement,
